@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from functools import wraps
 from typing import Any, Callable, ParamSpec, TypeVar
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import dateparser
 
@@ -176,6 +177,23 @@ def parse_user_datetime(value: str | None) -> datetime | None:
             "Could not parse the provided date/time. Please provide a specific date or time."
         )
     return ensure_timezone(parsed.astimezone(UTC))
+
+
+def get_service_timezone() -> ZoneInfo:
+    return ZoneInfo(get_settings().service_timezone)
+
+
+def to_service_timezone(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return ensure_timezone(value).astimezone(get_service_timezone())
+
+
+def format_local_datetime(value: datetime | None) -> str | None:
+    localized = to_service_timezone(value)
+    if localized is None:
+        return None
+    return localized.strftime("%Y-%m-%d %H:%M %Z")
 
 
 def sanitize_text(value: str, max_length: int = 500) -> str:

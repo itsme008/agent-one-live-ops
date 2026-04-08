@@ -63,7 +63,7 @@ The app bootstraps the dataset and tables on startup when `BOOTSTRAP_BIGQUERY_ON
 
 Tables:
 
-- `tasks(id STRING, title STRING, deadline TIMESTAMP, created_at TIMESTAMP)`
+- `tasks(id STRING, title STRING, deadline TIMESTAMP, deadline_text STRING, created_at TIMESTAMP)`
 - `notes(id STRING, content STRING, created_at TIMESTAMP)`
 
 ## Install And Run
@@ -120,5 +120,6 @@ curl http://127.0.0.1:8000/events
 ## Notes
 
 - If a date or time is ambiguous, the agent should ask a follow-up question instead of guessing.
+- Task deadlines are stored in UTC but returned with local-time display fields based on `SERVICE_TIMEZONE`.
 - The planner suggests time blocks but does not auto-create events unless explicitly asked.
 - Package installation and live Google API calls require an internet-enabled environment.

@@ -10,9 +10,11 @@ from google.cloud import bigquery
 from app.config.settings import get_settings, log_structured, validate_required_gcp_settings
 from app.tools.common import (
     ToolExecutionError,
+    format_local_datetime,
     parse_user_datetime,
     sanitize_text,
     tool_logger,
+    to_service_timezone,
     utcnow,
 )
 
@@ -23,6 +25,7 @@ TASK_SCHEMA = [
     bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("title", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("deadline", "TIMESTAMP", mode="NULLABLE"),
+    bigquery.SchemaField("deadline_text", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("created_at", "TIMESTAMP", mode="REQUIRED"),
 ]
 
@@ -60,6 +63,15 @@ def _ensure_table(
         log_structured(logger, logging.INFO, "bigquery_table_created", table_id=table_id)
 
 
+def _ensure_optional_task_columns(client: bigquery.Client) -> None:
+    settings = get_settings()
+    query = f"""
+        ALTER TABLE `{settings.tasks_table}`
+        ADD COLUMN IF NOT EXISTS deadline_text STRING
+    """
+    client.query(query).result()
+
+
 def bootstrap_bigquery() -> dict[str, Any]:
     client = get_bigquery_client()
     dataset_id = _dataset_ref()
@@ -73,7 +85,25 @@ def bootstrap_bigquery() -> dict[str, Any]:
 
     _ensure_table(client, "tasks", TASK_SCHEMA)
     _ensure_table(client, "notes", NOTES_SCHEMA)
+    _ensure_optional_task_columns(client)
     return {"status": "ok", "dataset": dataset_id, "tables": ["tasks", "notes"]}
+
+
+def _serialize_task(row: dict[str, Any]) -> dict[str, Any]:
+    deadline = row.get("deadline")
+    created_at = row.get("created_at")
+    deadline_local = to_service_timezone(deadline) if deadline else None
+    created_local = to_service_timezone(created_at) if created_at else None
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "deadline": deadline.isoformat() if deadline else None,
+        "deadline_text": row.get("deadline_text"),
+        "deadline_local": deadline_local.isoformat() if deadline_local else None,
+        "deadline_display": format_local_datetime(deadline) if deadline else None,
+        "created_at": created_at.isoformat() if created_at else None,
+        "created_at_local": created_local.isoformat() if created_local else None,
+    }
 
 
 @tool_logger("create_task_bq")
@@ -89,13 +119,21 @@ def create_task_bq(title: str, deadline: str | None = None) -> dict[str, Any]:
         "id": task_id,
         "title": sanitize_text(title, max_length=200),
         "deadline": parsed_deadline.isoformat() if parsed_deadline else None,
+        "deadline_text": sanitize_text(deadline, max_length=200) if deadline else None,
         "created_at": utcnow().isoformat(),
     }
     errors = client.insert_rows_json(settings.tasks_table, [row])
     if errors:
         raise ToolExecutionError(f"Failed to insert task into BigQuery: {errors}")
 
-    return {"status": "ok", "task": row}
+    task_payload = {
+        "id": row["id"],
+        "title": row["title"],
+        "deadline": parsed_deadline,
+        "deadline_text": row["deadline_text"],
+        "created_at": utcnow(),
+    }
+    return {"status": "ok", "task": _serialize_task(task_payload)}
 
 
 @tool_logger("get_tasks_bq")
@@ -103,20 +141,12 @@ def get_tasks_bq() -> dict[str, Any]:
     client = get_bigquery_client()
     settings = get_settings()
     query = f"""
-        SELECT id, title, deadline, created_at
+        SELECT id, title, deadline, deadline_text, created_at
         FROM `{settings.tasks_table}`
         ORDER BY deadline IS NULL, deadline, created_at DESC
     """
     rows = client.query(query).result()
-    tasks = [
-        {
-            "id": row["id"],
-            "title": row["title"],
-            "deadline": row["deadline"].isoformat() if row["deadline"] else None,
-            "created_at": row["created_at"].isoformat(),
-        }
-        for row in rows
-    ]
+    tasks = [_serialize_task(dict(row.items())) for row in rows]
     return {"status": "ok", "tasks": tasks}
 
 
